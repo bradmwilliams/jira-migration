@@ -140,7 +140,7 @@ func (s *CommentDiskStore) Sync(keys []string) ([]*IssueComments, error) {
 			return nil
 		}
 
-		comments, err := readBugComments(path)
+		comments, err := ReadBugComments(path)
 		if err != nil {
 			return fmt.Errorf("unable to read %q: %v", path, err)
 		}
@@ -245,9 +245,10 @@ func (s *CommentDiskStore) write(issue *Issue, comments *IssueComments) error {
 
 	if _, err := fmt.Fprintf(
 		w,
-		"JiraIssue %s: %s\nStatus: %s\nResolution: %s\nPriority: %s\nCreator: %s\nAssigned To: %s\nLabels: %s\nTarget Version: %s\n---\n",
+		"Issue %s: %s\nDescription: %s \nStatus: %s\nResolution: %s\nPriority: %s\nCreator: %s\nAssigned To: %s\nLabels: %s\nTarget Version: %s\n---\n",
 		issue.Info.ID,
 		lineSafe(issue.Info.Fields.Summary),
+		lineSafe(issue.Info.Fields.Description),
 		statusFieldName(issue.Info.Fields.Status),
 		resolutionFieldName(issue.Info.Fields.Resolution),
 		priorityFieldName(issue.Info.Fields.Priority),
@@ -299,15 +300,15 @@ func (s *CommentDiskStore) write(issue *Issue, comments *IssueComments) error {
 }
 
 var (
-	reDiskCommentsLineHeader        = regexp.MustCompile(`^JiraIssue (\d+): (.*)$`)
-	reDiskCommentsLineCommentHeader = regexp.MustCompile(`^Comment (\d+) by (.+) at (\d\d\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\d\+\d\d\d\d)$`)
+	reDiskCommentsLineHeader        = regexp.MustCompile(`^Issue (\d+): (.*)$`)
+	reDiskCommentsLineCommentHeader = regexp.MustCompile(`^Comment (\d+) by (.+) at (\d\d\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\d[+-]\d\d\d\d)$`)
 )
 
 const (
 	issueCommentDelimiter = "\x1e"
 )
 
-func readBugComments(path string) (*IssueComments, error) {
+func ReadBugComments(path string) (*IssueComments, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -372,6 +373,12 @@ ScanHeader:
 	for sr.Scan() {
 		text := sr.Text()
 		switch {
+		case strings.HasPrefix(text, "Description: "):
+			parts := strings.SplitN(text, " ", 2)
+			if len(parts) < 2 || len(parts[1]) == 0 {
+				continue
+			}
+			fields.Description = strings.TrimSpace(parts[1])
 		case strings.HasPrefix(text, "Status: "):
 			parts := strings.SplitN(text, " ", 2)
 			if len(parts) < 2 || len(parts[1]) == 0 {

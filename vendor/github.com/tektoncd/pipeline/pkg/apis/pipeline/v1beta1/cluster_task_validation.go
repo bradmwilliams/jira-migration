@@ -19,15 +19,19 @@ package v1beta1
 import (
 	"context"
 
+	"github.com/tektoncd/pipeline/pkg/apis/config"
 	"github.com/tektoncd/pipeline/pkg/apis/validate"
 	"knative.dev/pkg/apis"
 )
 
 var _ apis.Validatable = (*ClusterTask)(nil)
 
+// Validate performs validation of the metadata and spec of this ClusterTask.
 func (t *ClusterTask) Validate(ctx context.Context) *apis.FieldError {
-	if err := validate.ObjectMetadata(t.GetObjectMeta()); err != nil {
-		return err.ViaField("metadata")
+	if apis.IsInDelete(ctx) {
+		return nil
 	}
-	return t.Spec.Validate(ctx)
+	errs := validate.ObjectMetadata(t.GetObjectMeta()).ViaField("metadata")
+	ctx = config.SkipValidationDueToPropagatedParametersAndWorkspaces(ctx, false)
+	return errs.Also(t.Spec.Validate(apis.WithinSpec(ctx)).ViaField("spec"))
 }

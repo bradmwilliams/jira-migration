@@ -19,6 +19,7 @@ package config
 import (
 	"context"
 
+	sc "github.com/tektoncd/pipeline/pkg/spire/config"
 	"knative.dev/pkg/configmap"
 )
 
@@ -27,8 +28,13 @@ type cfgKey struct{}
 // Config holds the collection of configurations that we attach to contexts.
 // +k8s:deepcopy-gen=false
 type Config struct {
-	Defaults     *Defaults
-	FeatureFlags *FeatureFlags
+	Defaults         *Defaults
+	FeatureFlags     *FeatureFlags
+	ArtifactBucket   *ArtifactBucket
+	ArtifactPVC      *ArtifactPVC
+	Metrics          *Metrics
+	TrustedResources *TrustedResources
+	SpireConfig      *sc.SpireConfig
 }
 
 // FromContext extracts a Config from the provided context.
@@ -48,9 +54,20 @@ func FromContextOrDefaults(ctx context.Context) *Config {
 	}
 	defaults, _ := NewDefaultsFromMap(map[string]string{})
 	featureFlags, _ := NewFeatureFlagsFromMap(map[string]string{})
+	artifactBucket, _ := NewArtifactBucketFromMap(map[string]string{})
+	artifactPVC, _ := NewArtifactPVCFromMap(map[string]string{})
+	metrics, _ := newMetricsFromMap(map[string]string{})
+	trustedresources, _ := NewTrustedResourcesConfigFromMap(map[string]string{})
+	spireconfig, _ := NewSpireConfigFromMap(map[string]string{})
+
 	return &Config{
-		Defaults:     defaults,
-		FeatureFlags: featureFlags,
+		Defaults:         defaults,
+		FeatureFlags:     featureFlags,
+		ArtifactBucket:   artifactBucket,
+		ArtifactPVC:      artifactPVC,
+		Metrics:          metrics,
+		TrustedResources: trustedresources,
+		SpireConfig:      spireconfig,
 	}
 }
 
@@ -70,11 +87,16 @@ type Store struct {
 func NewStore(logger configmap.Logger, onAfterStore ...func(name string, value interface{})) *Store {
 	store := &Store{
 		UntypedStore: configmap.NewUntypedStore(
-			"defaults/features",
+			"defaults/features/artifacts",
 			logger,
 			configmap.Constructors{
-				GetDefaultsConfigName():     NewDefaultsFromConfigMap,
-				GetFeatureFlagsConfigName(): NewFeatureFlagsFromConfigMap,
+				GetDefaultsConfigName():         NewDefaultsFromConfigMap,
+				GetFeatureFlagsConfigName():     NewFeatureFlagsFromConfigMap,
+				GetArtifactBucketConfigName():   NewArtifactBucketFromConfigMap,
+				GetArtifactPVCConfigName():      NewArtifactPVCFromConfigMap,
+				GetMetricsConfigName():          NewMetricsFromConfigMap,
+				GetTrustedResourcesConfigName(): NewTrustedResourcesConfigFromConfigMap,
+				GetSpireConfigName():            NewSpireConfigFromConfigMap,
 			},
 			onAfterStore...,
 		),
@@ -98,9 +120,35 @@ func (s *Store) Load() *Config {
 	if featureFlags == nil {
 		featureFlags, _ = NewFeatureFlagsFromMap(map[string]string{})
 	}
+	artifactBucket := s.UntypedLoad(GetArtifactBucketConfigName())
+	if artifactBucket == nil {
+		artifactBucket, _ = NewArtifactBucketFromMap(map[string]string{})
+	}
+	artifactPVC := s.UntypedLoad(GetArtifactPVCConfigName())
+	if artifactPVC == nil {
+		artifactPVC, _ = NewArtifactPVCFromMap(map[string]string{})
+	}
+
+	metrics := s.UntypedLoad(GetMetricsConfigName())
+	if metrics == nil {
+		metrics, _ = newMetricsFromMap(map[string]string{})
+	}
+	trustedresources := s.UntypedLoad(GetTrustedResourcesConfigName())
+	if trustedresources == nil {
+		trustedresources, _ = NewTrustedResourcesConfigFromMap(map[string]string{})
+	}
+	spireconfig := s.UntypedLoad(GetSpireConfigName())
+	if spireconfig == nil {
+		spireconfig, _ = NewSpireConfigFromMap(map[string]string{})
+	}
 
 	return &Config{
-		Defaults:     defaults.(*Defaults).DeepCopy(),
-		FeatureFlags: featureFlags.(*FeatureFlags).DeepCopy(),
+		Defaults:         defaults.(*Defaults).DeepCopy(),
+		FeatureFlags:     featureFlags.(*FeatureFlags).DeepCopy(),
+		ArtifactBucket:   artifactBucket.(*ArtifactBucket).DeepCopy(),
+		ArtifactPVC:      artifactPVC.(*ArtifactPVC).DeepCopy(),
+		Metrics:          metrics.(*Metrics).DeepCopy(),
+		TrustedResources: trustedresources.(*TrustedResources).DeepCopy(),
+		SpireConfig:      spireconfig.(*sc.SpireConfig).DeepCopy(),
 	}
 }

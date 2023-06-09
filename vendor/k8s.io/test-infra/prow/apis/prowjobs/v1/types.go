@@ -25,8 +25,9 @@ import (
 	"strings"
 	"time"
 
-	pipelinev1alpha1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
+	pipelinev1beta1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	prowgithub "k8s.io/test-infra/prow/github"
@@ -96,7 +97,7 @@ const (
 
 const (
 	// StartedStatusFile is the JSON file that stores information about the build
-	// at the start ob the build. See testgrid/metadata/job.go for more details.
+	// at the start of the build. See testgrid/metadata/job.go for more details.
 	StartedStatusFile = "started.json"
 
 	// FinishedStatusFile is the JSON file that stores information about the build
@@ -105,6 +106,9 @@ const (
 
 	// ProwJobFile is the JSON file that stores the prowjob information.
 	ProwJobFile = "prowjob.json"
+
+	// CloneRecordFile is the JSON file that stores clone records of a prowjob.
+	CloneRecordFile = "clone-records.json"
 )
 
 // +genclient
@@ -187,7 +191,12 @@ type ProwJobSpec struct {
 	// PipelineRunSpec provides the basis for running the test as
 	// a pipeline-crd resource
 	// https://github.com/tektoncd/pipeline
-	PipelineRunSpec *pipelinev1alpha1.PipelineRunSpec `json:"pipeline_run_spec,omitempty"`
+	PipelineRunSpec *pipelinev1beta1.PipelineRunSpec `json:"pipeline_run_spec,omitempty"`
+
+	// TektonPipelineRunSpec provides the basis for running the test as
+	// a pipeline-crd resource
+	// https://github.com/tektoncd/pipeline
+	TektonPipelineRunSpec *TektonPipelineRunSpec `json:"tekton_pipeline_run_spec,omitempty"`
 
 	// DecorationConfig holds configuration options for
 	// decorating PodSpecs that users provide
@@ -213,11 +222,35 @@ type ProwJobSpec struct {
 	// JobQueueName is an optional field with name of a queue defining
 	// max concurrency. When several jobs from the same queue try to run
 	// at the same time, the number of them that is actually started is
-	// limited by JobQueueConcurrencies (part of Plank's config). If
+	// limited by JobQueueCapacities (part of Plank's config). If
 	// this field is left undefined inifinite concurrency is assumed.
 	// This behaviour may be superseded by MaxConcurrency field, if it
 	// is set to a constraining value.
 	JobQueueName string `json:"job_queue_name,omitempty"`
+}
+
+func (pjs ProwJobSpec) HasPipelineRunSpec() bool {
+	if pjs.TektonPipelineRunSpec != nil && pjs.TektonPipelineRunSpec.V1Beta1 != nil {
+		return true
+	}
+	if pjs.PipelineRunSpec != nil {
+		return true
+	}
+	return false
+}
+
+func (pjs ProwJobSpec) GetPipelineRunSpec() (*pipelinev1beta1.PipelineRunSpec, error) {
+	var found *pipelinev1beta1.PipelineRunSpec
+	if pjs.TektonPipelineRunSpec != nil {
+		found = pjs.TektonPipelineRunSpec.V1Beta1
+	}
+	if found == nil && pjs.PipelineRunSpec != nil {
+		found = pjs.PipelineRunSpec
+	}
+	if found == nil {
+		return nil, errors.New("pipeline run spec not found")
+	}
+	return found, nil
 }
 
 type GitHubTeamSlug struct {
@@ -475,6 +508,38 @@ type DecorationConfig struct {
 	// UploadIgnoresInterrupts causes sidecar to ignore interrupts for the upload process in
 	// hope that the test process exits cleanly before starting an upload.
 	UploadIgnoresInterrupts *bool `json:"upload_ignores_interrupts,omitempty"`
+
+	// SetLimitEqualsMemoryRequest sets memory limit equal to request.
+	SetLimitEqualsMemoryRequest *bool `json:"set_limit_equals_memory_request,omitempty"`
+	// DefaultMemoryRequest is the default requested memory on a test container.
+	// If SetLimitEqualsMemoryRequest is also true then the Limit will also be
+	// set the same as this request. Could be overridden by memory request
+	// defined explicitly on prowjob.
+	DefaultMemoryRequest *resource.Quantity `json:"default_memory_request,omitempty"`
+
+	// PodPendingTimeout defines how long the controller will wait to perform garbage
+	// collection on pending pods. Specific for OrgRepo or Cluster. If not set, it has a fallback inside plank field.
+	PodPendingTimeout *metav1.Duration `json:"pod_pending_timeout,omitempty"`
+	// PodRunningTimeout defines how long the controller will wait to abort a prowjob pod
+	// stuck in running state. Specific for OrgRepo or Cluster. If not set, it has a fallback inside plank field.
+	PodRunningTimeout *metav1.Duration `json:"pod_running_timeout,omitempty"`
+	// PodUnscheduledTimeout defines how long the controller will wait to abort a prowjob
+	// stuck in an unscheduled state. Specific for OrgRepo or Cluster. If not set, it has a fallback inside plank field.
+	PodUnscheduledTimeout *metav1.Duration `json:"pod_unscheduled_timeout,omitempty"`
+
+	// RunAsUser defines UID for process in all containers running in a Pod.
+	// This field will not override the existing ProwJob's PodSecurityContext.
+	// Equivalent to PodSecurityContext's RunAsUser
+	RunAsUser *int64 `json:"run_as_user,omitempty"`
+	// RunAsGroup defines GID of process in all containers running in a Pod.
+	// This field will not override the existing ProwJob's PodSecurityContext.
+	// Equivalent to PodSecurityContext's RunAsGroup
+	RunAsGroup *int64 `json:"run_as_group,omitempty"`
+	// FsGroup defines special supplemental group ID used in all containers in a Pod.
+	// This allows to change the ownership of particular volumes by kubelet.
+	// This field will not override the existing ProwJob's PodSecurityContext.
+	// Equivalent to PodSecurityContext's FsGroup
+	FsGroup *int64 `json:"fs_group,omitempty"`
 }
 
 type CensoringOptions struct {
@@ -677,6 +742,37 @@ func (d *DecorationConfig) ApplyDefault(def *DecorationConfig) *DecorationConfig
 		merged.UploadIgnoresInterrupts = def.UploadIgnoresInterrupts
 	}
 
+	if merged.SetLimitEqualsMemoryRequest == nil {
+		merged.SetLimitEqualsMemoryRequest = def.SetLimitEqualsMemoryRequest
+	}
+
+	if merged.DefaultMemoryRequest == nil {
+		merged.DefaultMemoryRequest = def.DefaultMemoryRequest
+	}
+
+	if merged.PodPendingTimeout == nil {
+		merged.PodPendingTimeout = def.PodPendingTimeout
+	}
+
+	if merged.PodRunningTimeout == nil {
+		merged.PodRunningTimeout = def.PodRunningTimeout
+	}
+
+	if merged.PodUnscheduledTimeout == nil {
+		merged.PodUnscheduledTimeout = def.PodUnscheduledTimeout
+	}
+
+	if merged.RunAsUser == nil {
+		merged.RunAsUser = def.RunAsUser
+	}
+
+	if merged.RunAsGroup == nil {
+		merged.RunAsGroup = def.RunAsGroup
+	}
+
+	if merged.FsGroup == nil {
+		merged.FsGroup = def.FsGroup
+	}
 	return &merged
 }
 
@@ -975,6 +1071,10 @@ type Pull struct {
 	// github: pull/123/head
 	// gerrit: refs/changes/00/123/1
 	Ref string `json:"ref,omitempty"`
+	// HeadRef is the git ref (branch name) of the proposed change.  This can be more human-readable than just
+	// a PR #, and some tools want this metadata to help associate the work with a pull request (e.g. some code
+	// scanning services, or chromatic.com).
+	HeadRef string `json:"head_ref,omitempty"`
 	// Link links to the pull request itself.
 	Link string `json:"link,omitempty"`
 	// CommitLink links to the commit identified by the SHA.
@@ -1058,6 +1158,11 @@ func (r Refs) OrgRepoString() string {
 // jenkins-operator that the job is generated by the https://go.cloudbees.com/docs/plugins/github-branch-source/#github-branch-source plugin
 type JenkinsSpec struct {
 	GitHubBranchSourceJob bool `json:"github_branch_source_job,omitempty"`
+}
+
+// TektonPipelineRunSpec is optional parameters for Tekton pipeline jobs.
+type TektonPipelineRunSpec struct {
+	V1Beta1 *pipelinev1beta1.PipelineRunSpec `json:"v1beta1,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object

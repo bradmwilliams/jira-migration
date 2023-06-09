@@ -17,9 +17,11 @@ limitations under the License.
 package v1beta1
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/hashicorp/go-multierror"
 	resource "github.com/tektoncd/pipeline/pkg/apis/resource/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 )
@@ -30,6 +32,7 @@ import (
 type PipelineResourceType = resource.PipelineResourceType
 
 var (
+	// AllowedOutputResources are the resource types that can be used as outputs
 	AllowedOutputResources = resource.AllowedOutputResources
 )
 
@@ -42,15 +45,6 @@ const (
 
 	// PipelineResourceTypeImage indicates that this source is a docker Image.
 	PipelineResourceTypeImage PipelineResourceType = resource.PipelineResourceTypeImage
-
-	// PipelineResourceTypeCluster indicates that this source is a k8s cluster Image.
-	PipelineResourceTypeCluster PipelineResourceType = resource.PipelineResourceTypeCluster
-
-	// PipelineResourceTypePullRequest indicates that this source is a SCM Pull Request.
-	PipelineResourceTypePullRequest PipelineResourceType = resource.PipelineResourceTypePullRequest
-
-	// PipelineResourceTypeCloudEvent indicates that this source is a cloud event URI
-	PipelineResourceTypeCloudEvent PipelineResourceType = resource.PipelineResourceTypeCloudEvent
 )
 
 // AllResourceTypes can be used for validation to check if a provided Resource type is one of the known types.
@@ -61,9 +55,11 @@ var AllResourceTypes = resource.AllResourceTypes
 type TaskResources struct {
 	// Inputs holds the mapping from the PipelineResources declared in
 	// DeclaredPipelineResources to the input PipelineResources required by the Task.
+	// +listType=atomic
 	Inputs []TaskResource `json:"inputs,omitempty"`
 	// Outputs holds the mapping from the PipelineResources declared in
 	// DeclaredPipelineResources to the input PipelineResources required by the Task.
+	// +listType=atomic
 	Outputs []TaskResource `json:"outputs,omitempty"`
 }
 
@@ -79,8 +75,10 @@ type TaskResource struct {
 // TaskRunResources allows a TaskRun to declare inputs and outputs TaskResourceBinding
 type TaskRunResources struct {
 	// Inputs holds the inputs resources this task was invoked with
+	// +listType=atomic
 	Inputs []TaskResourceBinding `json:"inputs,omitempty"`
 	// Outputs holds the inputs resources this task was invoked with
+	// +listType=atomic
 	Outputs []TaskResourceBinding `json:"outputs,omitempty"`
 }
 
@@ -92,6 +90,7 @@ type TaskResourceBinding struct {
 	// The optional Path field corresponds to a path on disk at which the Resource can be found
 	// (used when providing the resource via mounted volume, overriding the default logic to fetch the Resource).
 	// +optional
+	// +listType=atomic
 	Paths []string `json:"paths,omitempty"`
 }
 
@@ -120,17 +119,54 @@ type PipelineResourceBinding struct {
 
 // PipelineResourceResult used to export the image name and digest as json
 type PipelineResourceResult struct {
-	Key          string `json:"key"`
-	Value        string `json:"value"`
-	ResourceName string `json:"resourceName,omitempty"`
-	// This field should be deprecated and removed in the next API version.
-	// See https://github.com/tektoncd/pipeline/issues/2694 for more information.
-	ResourceRef PipelineResourceRef `json:"resourceRef,omitempty"`
-	ResultType  ResultType          `json:"type,omitempty"`
+	Key          string     `json:"key"`
+	Value        string     `json:"value"`
+	ResourceName string     `json:"resourceName,omitempty"`
+	ResultType   ResultType `json:"type,omitempty"`
 }
 
 // ResultType used to find out whether a PipelineResourceResult is from a task result or not
-type ResultType string
+// Note that ResultsType is another type which is used to define the data type
+// (e.g. string, array, etc) we used for Results
+type ResultType int
+
+// UnmarshalJSON unmarshals either an int or a string into a ResultType. String
+// ResultTypes were removed because they made JSON messages bigger, which in
+// turn limited the amount of space in termination messages for task results. String
+// support is maintained for backwards compatibility - the Pipelines controller could
+// be stopped midway through TaskRun execution, updated with support for int in place
+// of string, and then fail the running TaskRun because it doesn't know how to interpret
+// the string value that the TaskRun's entrypoint will emit when it completes.
+func (r *ResultType) UnmarshalJSON(data []byte) error {
+	var asInt int
+	var intErr error
+
+	if err := json.Unmarshal(data, &asInt); err != nil {
+		intErr = err
+	} else {
+		*r = ResultType(asInt)
+		return nil
+	}
+
+	var asString string
+
+	if err := json.Unmarshal(data, &asString); err != nil {
+		return fmt.Errorf("unsupported value type, neither int nor string: %v", multierror.Append(intErr, err).ErrorOrNil())
+	}
+
+	switch asString {
+	case "TaskRunResult":
+		*r = TaskRunResultType
+	case "PipelineResourceResult":
+		*r = PipelineResourceResultType
+	case "InternalTektonResult":
+		*r = InternalTektonResultType
+	default:
+		*r = UnknownResultType
+	}
+
+	return nil
+}
 
 // PipelineResourceRef can be used to refer to a specific instance of a Resource
 type PipelineResourceRef struct {
@@ -167,9 +203,12 @@ type TaskModifier interface {
 
 // InternalTaskModifier implements TaskModifier for resources that are built-in to Tekton Pipelines.
 type InternalTaskModifier struct {
-	StepsToPrepend []Step
-	StepsToAppend  []Step
-	Volumes        []v1.Volume
+	// +listType=atomic
+	StepsToPrepend []Step `json:"stepsToPrepend"`
+	// +listType=atomic
+	StepsToAppend []Step `json:"stepsToAppend"`
+	// +listType=atomic
+	Volumes []v1.Volume `json:"volumes"`
 }
 
 // GetStepsToPrepend returns a set of Steps to prepend to the Task.

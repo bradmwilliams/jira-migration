@@ -44,12 +44,23 @@ type clientFactoryAdapter struct {
 
 // ClientFromDir creates a client that operates on a repo that has already
 // been cloned to the given directory.
+//
+// CloneURI is the third arg that's ignored here, it's currently only used for
+// cloning Gerrit repos. This client is not used for cloning Gerrit repos yet,
+// so leave it unimplemented.
+// (TODO: chaodaiG) Either implement or remove this struct.
 func (a *clientFactoryAdapter) ClientFromDir(org, repo, dir string) (RepoClient, error) {
 	return nil, errors.New("no ClientFromDir implementation exists in the v1 git client")
 }
 
 // Repo creates a client that operates on a new clone of the repo.
 func (a *clientFactoryAdapter) ClientFor(org, repo string) (RepoClient, error) {
+	r, err := a.Client.Clone(org, repo)
+	return &repoClientAdapter{Repo: r}, err
+}
+
+// v1 clients do not support customizing pre-repo options.
+func (a *clientFactoryAdapter) ClientForWithRepoOpts(org, repo string, repoOpts RepoOpts) (RepoClient, error) {
 	r, err := a.Client.Clone(org, repo)
 	return &repoClientAdapter{Repo: r}, err
 }
@@ -82,6 +93,10 @@ func (a *repoClientAdapter) PushToNamedFork(forkName, branch string, force bool)
 	return a.Repo.PushToNamedFork(forkName, branch, force)
 }
 
+func (a *repoClientAdapter) ObjectExists(sha string) (bool, error) {
+	return false, errors.New("no ObjectExists implementation exists in the v1 repo client")
+}
+
 func (a *repoClientAdapter) PushToCentral(branch string, force bool) error {
 	return errors.New("no PushToCentral implementation exists in the v1 repo client")
 }
@@ -98,6 +113,10 @@ func (a *repoClientAdapter) Fetch(arg ...string) error {
 
 func (a *repoClientAdapter) FetchFromRemote(resolver RemoteResolver, branch string) error {
 	return errors.New("no FetchFromRemote implementation exists in the v1 repo client")
+}
+
+func (a *repoClientAdapter) FetchCommits(noFetchTags bool, commitSHAs []string) error {
+	return errors.New("no FetchCommits implementation exists in the v1 repo client")
 }
 
 func (a *repoClientAdapter) RemoteUpdate() error {
