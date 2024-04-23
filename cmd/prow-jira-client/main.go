@@ -9,8 +9,8 @@ import (
 	"github.com/openshift-eng/jira-lifecycle-plugin/pkg/helpers"
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
-	"k8s.io/test-infra/prow/flagutil"
-	jira2 "k8s.io/test-infra/prow/jira"
+	"sigs.k8s.io/prow/prow/flagutil"
+	jira2 "sigs.k8s.io/prow/prow/jira"
 	"strings"
 )
 

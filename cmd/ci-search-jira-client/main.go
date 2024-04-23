@@ -7,7 +7,7 @@ import (
 	"github.com/openshift/ci-search/jira"
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
-	"k8s.io/test-infra/prow/flagutil"
+	"sigs.k8s.io/prow/prow/flagutil"
 )
 
 type options struct {
