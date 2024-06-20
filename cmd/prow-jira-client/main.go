@@ -6,9 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"github.com/andygrunwald/go-jira"
-	"github.com/openshift-eng/jira-lifecycle-plugin/pkg/helpers"
 	"github.com/spf13/cobra"
 	"k8s.io/klog/v2"
+	"reflect"
 	"sigs.k8s.io/prow/prow/flagutil"
 	jira2 "sigs.k8s.io/prow/prow/jira"
 	"strings"
@@ -55,11 +55,8 @@ func (o *options) Run() error {
 		klog.Fatalf("Unable to create jira client: %w", err)
 	}
 
-	// issue, err := c.GetIssue("OCPBUGS-531")
-	// issue, err := c.GetIssue("KATA-1680")
-	//issue, err := c.GetIssue("OCPBUGS-613")
-	//issue, err := c.GetIssue("OCPBUGS-6517")
-	issue, err := c.GetIssue("OCPBUGS-14818")
+	// issue, err := c.GetIssue("TRT-1716")
+	issue, err := c.GetIssue("OCPBUGS-35865")
 	if err != nil {
 		klog.Errorf("Unable to get jira issue: %w", err)
 		return err
@@ -70,11 +67,27 @@ func (o *options) Run() error {
 		klog.Errorf("unable to marshal Jira Issue: %v", err)
 		return nil
 	}
-	klog.V(2).Infof("Retrieved issue:\n %s", string(b))
+	klog.V(2).Infof("Retrieved issue:\n%s", string(b))
 
-	targetVersion, err := helpers.GetIssueTargetVersion(issue)
+	fields := getCustomFields(*issue)
 
-	klog.V(2).Infof("Retrieved issue target version:\n %v", targetVersion)
+	b, err = json.MarshalIndent(fields, "", "    ")
+	if err != nil {
+		klog.Errorf("failed to marshall the custon fields struct. Error: %v", err)
+		return nil
+	}
+	klog.V(2).Infof("Custom Fields:\n%s", string(b))
+
+	b, err = json.Marshal(fields)
+	if err != nil {
+		klog.Errorf("failed to marshall the custon fields struct. Error: %v", err)
+		return nil
+	}
+	klog.V(2).Infof("Custom Fields:\n%s", string(b))
+
+	//targetVersion, err := helpers.GetIssueTargetVersion(issue)
+	//
+	//klog.V(2).Infof("Retrieved issue target version:\n %v", targetVersion)
 
 	// create deep copy of parent "Fields" field
 	//data, err := json.Marshal(issue.Fields)
@@ -235,4 +248,103 @@ func generateMarkdownLink(url, id string) string {
 		link = `[Jira Issue %s](%sbrowse/%s)`
 	}
 	return fmt.Sprintf(link, id, url, id)
+}
+
+type CustomField struct {
+	FieldName   string  `bigquery:"fieldName" json:"fieldName,omitempty"`
+	ID          string  `bigquery:"id" json:"id,omitempty"`
+	Name        string  `bigquery:"name" json:"name,omitempty"`
+	Key         string  `bigquery:"key" json:"key,omitempty"`
+	DisplayName string  `bigquery:"displayName" json:"displayName,omitempty"`
+	Description string  `bigquery:"description" json:"description,omitempty"`
+	Value       string  `bigquery:"value" json:"value,omitempty"`
+	Votes       float64 `bigquery:"votes" json:"votes,omitempty"`
+}
+
+func getCustomFields(i jira.Issue) []CustomField {
+	var customFields []CustomField
+	klog.Infof("Issue: %s", i.Key)
+	for k, v := range i.Fields.Unknowns {
+		if v == nil {
+			continue
+		}
+		klog.Infof("Field: %s -> %s", k, v)
+		field := processCustomFieldValue(k, v)
+		if field != nil {
+			customFields = append(customFields, *field)
+		}
+	}
+	return customFields
+}
+
+func processCustomFieldValue(name string, value interface{}) *CustomField {
+	var field *CustomField
+	var fields []CustomField
+	var valueStr string
+
+	switch t := value.(type) {
+	case int:
+		valueStr = fmt.Sprintf("%d", value)
+	case float64:
+		valueStr = fmt.Sprintf("%f", value)
+	case string:
+		valueStr = fmt.Sprintf("%s", value)
+	case bool:
+		valueStr = fmt.Sprintf("%t", value)
+	case []interface{}:
+		for _, n := range t {
+			cf := getCustomField(name, n)
+			if cf != nil {
+				fields = append(fields, *cf)
+			}
+		}
+	case map[string]interface{}:
+		field = getCustomField(name, value)
+	default:
+		var r = reflect.TypeOf(t)
+		klog.Warningf("Unknown CustomField type: %v", r)
+		return nil
+	}
+
+	switch {
+	case field != nil:
+		field.FieldName = name
+		return field
+	case fields != nil && len(fields) > 0:
+		b, err := json.Marshal(fields)
+		if err != nil {
+			klog.Errorf("failed to marshall the fields struct for %s. Error: %v", name, err)
+			return nil
+		}
+		return &CustomField{
+			FieldName: name,
+			Value:     fmt.Sprint(string(b)),
+		}
+	case len(valueStr) > 0:
+		return &CustomField{
+			FieldName: name,
+			Value:     valueStr,
+		}
+	default:
+		return nil
+	}
+}
+
+func getCustomField(name string, value interface{}) *CustomField {
+	field := &CustomField{}
+	switch v := value.(type) {
+	case string:
+		field.Value = v
+	default:
+		bytes, err := json.Marshal(value)
+		if err != nil {
+			klog.Errorf("failed to process the custom field %s. Error : %v", name, err)
+			return nil
+		}
+		if err = json.Unmarshal(bytes, field); err != nil {
+			klog.Errorf("failed to unmarshall the json to struct for %s. Error: %v", name, err)
+			return nil
+		}
+	}
+	return field
 }
